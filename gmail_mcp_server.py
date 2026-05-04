@@ -1,5 +1,7 @@
 import base64
 import os
+import jwt
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 
 from google.auth.transport.requests import Request
@@ -9,13 +11,39 @@ from googleapiclient.discovery import build
 
 from fastmcp import FastMCP
 
-# Scopes necesarios para leer y enviar emails
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
+# JWT Config
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-key")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = 24
+
 mcp = FastMCP("GmailManager")
+
+
+# ─── JWT UTILITIES ─────────────────────────────────────────────────────────────
+def generate_token(user_id: str) -> str:
+    """Genera un token JWT válido por 24 horas."""
+    payload = {
+        "sub": user_id,
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_token(token: str) -> dict:
+    """Verifica y decodifica un token JWT."""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return {"valid": True, "user_id": payload["sub"]}
+    except jwt.ExpiredSignatureError:
+        return {"valid": False, "error": "Token expirado"}
+    except jwt.InvalidTokenError:
+        return {"valid": False, "error": "Token inválido"}
 
 
 def get_gmail_service():
@@ -38,17 +66,49 @@ def get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
+# ─── TOOL: Generar token JWT ───────────────────────────────────────────────────
+@mcp.tool()
+def get_jwt_token(user_id: str) -> dict:
+    """Genera un token JWT para autenticación remota.
+    
+    Args:
+        user_id: Identificador del usuario (ej: tu email)
+    """
+    token = generate_token(user_id)
+    return {
+        "token": token,
+        "expires_in": f"{JWT_EXPIRY_HOURS} horas",
+        "algorithm": JWT_ALGORITHM,
+    }
+
+
+# ─── TOOL: Verificar token JWT ─────────────────────────────────────────────────
+@mcp.tool()
+def check_jwt_token(token: str) -> dict:
+    """Verifica si un token JWT es válido.
+    
+    Args:
+        token: El token JWT a verificar
+    """
+    return verify_token(token)
+
+
 # ─── TOOL: Listar emails ───────────────────────────────────────────────────────
 @mcp.tool()
-def list_emails(query: str = "in:inbox", max_results: int = 10) -> list[dict]:
+def list_emails(query: str = "in:inbox", max_results: int = 10, token: str = "") -> list[dict]:
     """Lista los emails más recientes de Gmail.
     
     Args:
-        query: Filtro de búsqueda estilo Gmail (ej: 'in:inbox', 'is:unread')
+        query: Filtro de búsqueda estilo Gmail
         max_results: Número máximo de emails a devolver
+        token: JWT token para autenticación remota (opcional en local)
     """
-    service = get_gmail_service()
+    if token:
+        result = verify_token(token)
+        if not result["valid"]:
+            return [{"error": result["error"]}]
 
+    service = get_gmail_service()
     results = service.users().messages().list(
         userId="me", q=query, maxResults=max_results
     ).execute()
@@ -76,16 +136,21 @@ def list_emails(query: str = "in:inbox", max_results: int = 10) -> list[dict]:
 
 # ─── TOOL: Enviar email ────────────────────────────────────────────────────────
 @mcp.tool()
-def send_email(to: str, subject: str, body: str) -> dict:
+def send_email(to: str, subject: str, body: str, token: str = "") -> dict:
     """Envía un email desde la cuenta de Gmail autenticada.
     
     Args:
         to: Dirección de destino
         subject: Asunto del email
         body: Cuerpo del mensaje
+        token: JWT token para autenticación remota (opcional en local)
     """
-    service = get_gmail_service()
+    if token:
+        result = verify_token(token)
+        if not result["valid"]:
+            return {"error": result["error"]}
 
+    service = get_gmail_service()
     message = MIMEText(body)
     message["to"] = to
     message["subject"] = subject
