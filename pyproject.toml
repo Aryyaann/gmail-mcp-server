@@ -1,0 +1,10 @@
+[project]
+name = "gmail-mcp-server"
+version = "0.1.0"
+description = "Gmail MCP Server for Claude Desktop"
+requires-python = ">=3.10"
+
+[project.dependencies]
+fastmcp = "*"
+google-auth-oauthlib = "*"
+google-api-python-client = "*"
