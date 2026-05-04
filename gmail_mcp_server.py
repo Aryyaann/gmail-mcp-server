@@ -190,4 +190,4 @@ Incluye: saludo apropiado, cuerpo del mensaje y despedida."""
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
